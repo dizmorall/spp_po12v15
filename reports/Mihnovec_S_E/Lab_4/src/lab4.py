@@ -34,11 +34,8 @@ def fetch_event_interactions(username: str) -> List[str]:
     interacted = []
     for event in response.json():
         repo_data = event.get("repo")
-        if not repo_data:
-            continue
-        repo_name = repo_data.get("name", "")
-        if "/" in repo_name:
-            owner = repo_name.split("/")[0]
+        if repo_data and "/" in repo_data.get("name", ""):
+            owner = repo_data["name"].split("/")[0]
             if owner != username:
                 interacted.append(owner)
     return interacted
@@ -56,55 +53,18 @@ def fetch_repo_contributors(username: str) -> List[str]:
         if not contrib_url:
             continue
         try:
-            contrib_resp = requests.get(contrib_url, headers=get_headers(), timeout=10)
-            if contrib_resp.status_code == 200:
-                for user in contrib_resp.json():
-                    if user["login"] != username:
-                        contributors.append(user["login"])
+            resp = requests.get(contrib_url, headers=get_headers(), timeout=10)
+            if resp.status_code == 200:
+                contributors.extend([u["login"] for u in resp.json() if u["login"] != username])
         except requests.exceptions.RequestException:
             continue
     return contributors
 
 
-def main() -> None:
-    """Основная логика сбора данных и построения графа."""
-    username = input("Введите имя пользователя GitHub: ").strip()
-    if not username:
-        print("Имя пользователя не может быть пустым.")
-        return
-
-    print(f"Анализируем взаимодействия пользователя {username}...")
-    interactions: Set[str] = set()
-
-    try:
-        interactions.update(fetch_starred_owners(username))
-        interactions.update(fetch_event_interactions(username))
-        interactions.update(fetch_repo_contributors(username))
-    except requests.exceptions.RequestException as error:
-        print(f"Ошибка при обращении к API: {error}")
-        return
-
-    interactions.discard(username)
-    print(f"Найдено {len(interactions)} связанных разработчика(ов).")
-
-    graph = nx.Graph()
-    graph.add_node(username, color="red", size=800)
-
-    json_data = {"nodes": [{"id": username}], "links": []}
-
-    for user in interactions:
-        graph.add_node(user, color="skyblue", size=300)
-        graph.add_edge(username, user)
-        json_data["nodes"].append({"id": user})
-        json_data["links"].append({"source": username, "target": user})
-
-    with open("github_network.json", "w", encoding="utf-8") as file_out:
-        json.dump(json_data, file_out, indent=4)
-    print("Граф сохранён в github_network.json")
-
+def save_visualization(graph: nx.Graph, username: str) -> None:
+    """Отрисовывает граф и сохраняет его в файл PNG."""
     plt.figure(figsize=(12, 8))
     pos = nx.spring_layout(graph, seed=42)
-
     colors = [graph.nodes[n].get("color", "skyblue") for n in graph.nodes]
     sizes = [graph.nodes[n].get("size", 300) for n in graph.nodes]
 
@@ -118,10 +78,42 @@ def main() -> None:
         font_weight="bold",
         edge_color="gray",
     )
-
     plt.title(f"Карта взаимодействий на GitHub: {username}")
     plt.savefig("github_network.png", format="png", dpi=300)
-    print("Визуализация графа сохранена в github_network.png")
+
+
+def main() -> None:
+    """Основная логика сбора данных и управления программой."""
+    username = input("Введите имя пользователя GitHub: ").strip()
+    if not username:
+        return
+
+    print(f"Анализируем interactions для {username}...")
+    interactions: Set[str] = set()
+    try:
+        interactions.update(fetch_starred_owners(username))
+        interactions.update(fetch_event_interactions(username))
+        interactions.update(fetch_repo_contributors(username))
+    except requests.exceptions.RequestException as error:
+        print(f"Ошибка API: {error}")
+        return
+
+    interactions.discard(username)
+    graph = nx.Graph()
+    graph.add_node(username, color="red", size=800)
+    json_data = {"nodes": [{"id": username}], "links": []}
+
+    for user in interactions:
+        graph.add_node(user, color="skyblue", size=300)
+        graph.add_edge(username, user)
+        json_data["nodes"].append({"id": user})
+        json_data["links"].append({"source": username, "target": user})
+
+    with open("github_network.json", "w", encoding="utf-8") as file:
+        json.dump(json_data, file, indent=4)
+
+    save_visualization(graph, username)
+    print(f"Готово. Найдено связей: {len(interactions)}")
 
 
 if __name__ == "__main__":
